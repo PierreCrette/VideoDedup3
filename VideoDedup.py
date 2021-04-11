@@ -1,5 +1,8 @@
 #!/usr/bin/env python3
 
+#ToDo:
+
+
 import sys
 import os
 import subprocess
@@ -28,7 +31,7 @@ import gc
 import psutil
 
 # Declarations
-version = 'VideoDedup v3.4.006'
+version = 'VideoDedup v3.4.007'
 test = True
 debug = 1
 copyright = 0
@@ -42,6 +45,7 @@ maxdiff = 0
 maxdiffuw = 0
 minimg = 5
 speed = 2
+blksize = 999
 parallel = False
 renamed = False
 noffmpeg = False
@@ -158,7 +162,7 @@ def SameSrcNames():
     prev = srclst[i]
 
 
-def SQLexec(sql, display=False, threshold=1):
+def SQLexec(sql, displayresult=False, threshold=1):
   global conn, cur
 
   if len(sql) > 0:
@@ -166,15 +170,18 @@ def SQLexec(sql, display=False, threshold=1):
     try:
       cur.execute(sql)
     except (Exception, psycopg2.DatabaseError) as error:
+      print('ERROR cannot execute: ' + sql)
       print(error)
       sys.exit(1)
-    if display:
+    if displayresult:
       try:
         row = cur.fetchone()
         log(str(row), threshold)
         return row[0]
       except(Exception, psycopg2.DatabaseError) as error:
+        print('ERROR cannot get result of: ' + sql)
         print(error)
+        return 0
 
 
 def SQLopen():
@@ -182,6 +189,7 @@ def SQLopen():
 
   SQLexec('CREATE TABLE IF NOT EXISTS timages (Id SERIAL NOT NULL PRIMARY KEY, tsdupe INTEGER, srcshortname TEXT, imgshortname TEXT, keyimg TEXT, dist00 INTEGER, dist01 INTEGER, dist02 INTEGER, dist03 INTEGER)', False, 2)
   SQLexec('CREATE TABLE IF NOT EXISTS timagesuw (Id SERIAL NOT NULL PRIMARY KEY, imgshortname TEXT, keyimg TEXT, dist00 INTEGER, dist01 INTEGER)', False, 2)
+  SQLexec('CREATE TABLE IF NOT EXISTS tpairsuw (Id SERIAL NOT NULL PRIMARY KEY, srcshortname1 TEXT, srcshortname2 TEXT)', False, 2)
   SQLexec('CREATE TABLE IF NOT EXISTS timagedupes (idimage1 INTEGER, idimage2 INTEGER, dist INTEGER)', False, 2)
   SQLexec('CREATE TABLE IF NOT EXISTS tsources (srcshortname TEXT PRIMARY KEY, srcfld TEXT, imgfld TEXT)', False, 2)
   SQLexec('CREATE TABLE IF NOT EXISTS tmpimgpairs (dist INTEGER, Lid INTEGER, Lsrcshortname TEXT, Limgshortname TEXT, Rid INTEGER, Rsrcshortname TEXT, Rimgshortname TEXT);', False, 2)
@@ -297,19 +305,18 @@ def IsVideo(extention=''):
           or (extention == '.FLV') or (extention == '.RM') or (extention == '.OGM') or (extention == '.M2TS') or (extention == '.RMVB'))
 
 
-def on_release(key):
-  global stopaskedflag
-  # print('{0} released'.format(key))
-  if key == keyboard.Key.esc:
-    # Stop listener
-    stopaskedflag = True
-    # return False
+# def on_release(key):
+#   global stopaskedflag
+#   # print('{0} released'.format(key))
+#   if key == keyboard.Key.esc:
+#     # Stop listener
+#     stopaskedflag = True
 
 
 def StopAsked():
   global stopaskedflag
-  listener = keyboard.Listener(on_release=on_release)
-  listener.start()
+  # listener = keyboard.Listener(on_release=on_release)
+  # listener.start()
   return stopaskedflag
 
 
@@ -346,8 +353,8 @@ def BoucleSupp(radical='', root=True):
                 mvdst = newsrc[2] + fname + '/'
                 log('Moving ' + mvsrc + ' to ' + mvdst, 0)
                 try:
-                  print(newsrc[2])
-                  print(fname)
+                  # print(newsrc[2])
+                  # print(fname)
                   shutil.move(folderimg + radical + fname, newsrc[2])
                 except:
                   log('' + txtred + 'Error' + txtnocolor + ' when moving image folder. Try to remove ' + folderimg + radical + fname, 0)
@@ -579,7 +586,7 @@ def mpimagemagick(elt, queue):
         print(error)
       log('CreateFingerprint done for ' + folder, 3)
 
-  (mpfolderi, mpfvideo, mpfile, mpargs, mps, mpcptdone, mpcpttodo, mptodoparam, mpminimgcount) = elt
+  (mpfolderi, mpfvideo, mpfile, mpargs, mps, mpcptdone, mpcpttodo, mptodoparam, mpminimgcount, mpminfo) = elt
   mpperf = time.time()
   todompimagemagick = True
   tmpmp = tmp[:-1] + '.' + str(mpcptdone) + '/'
@@ -600,6 +607,7 @@ def mpimagemagick(elt, queue):
         log('    Thread ---------------------------------------------------------------------------------------------------', 0)
         todompimagemagick = False
     if todompimagemagick:
+      errflag = 0
       siz = os.path.getsize(mpfvideo) / 1048576
       if mptodoparam:
         # Call ffmpeg
@@ -624,16 +632,24 @@ def mpimagemagick(elt, queue):
           f.close
         else:
           log('Thread {}/{} '.format(mpcptdone, mpcpttodo) + txtred + ' Error: ' + txtnocolor +
-              f"Cannot create param.txt because not enough jpeg {mpjpegcount} < {mpminimgcount} " + mpfolderi + mpfile, 0)
+              f"Cannot create param.txt because not enough jpeg {mpjpegcount} / {mpminfo} = {round(mpjpegcount / mpminfo * 100)}% " + mpfolderi + mpfile, 0)
+          fp = open(folderimg + 'lid_' + str(os.getpid()) + '.sqltmp', 'a')
+          fp.write("DELETE FROM timages where srcshortname='" + mpfile + "';")
+          fp.close()
+          errflag = 2
       else:
         log('Thread {}/{} '.format(mpcptdone, mpcpttodo) + 'Cannot create param.txt because folder doesnt exists ' + mpfolderi + mpfile, 0)
+        fp = open(folderimg + 'lid_' + str(os.getpid()) + '.sqltmp', 'a')
+        fp.write("DELETE FROM timages where srcshortname='" + mpfile + "';")
+        fp.close()
+        errflag = 2
       dur = time.time() - mpperf
       if mptodoparam:
         msg = 'Duration ffmpeg + fingerprint: '
       else:
         msg = 'Duration fingerprint: '
       log('Thread {}/{} '.format(mpcptdone, mpcpttodo) + msg + duration(dur, False) + \
-          ' for ' + str(round(siz, 0)) + ' Mb ' + txtgreen + '@ ' + str(round(threads * siz / dur * 0.0864, 2)) + ' Tb/day' + txtnocolor, 0)
+          ' for ' + str(round(siz, 0)) + ' Mb ' + txtgreen + '@ ' + str(round(threads * siz / dur * 0.0864, 2)) + ' Tb/day' + txtnocolor, errflag)
       log('Thread {}/{} '.format(mpcptdone, mpcpttodo) + mpfolderi + mpfile, 3)
       if parallel:
         os.remove(mpfolderi + mpfile + '.run')
@@ -722,7 +738,7 @@ def OneFile(folderv, folderi, file, nbrecords):
       os.makedirs(folderi2 + '/', mode=0o777)
     CreateSrc(folderi2)
     # fire off workers
-    job = pool.apply_async(mpimagemagick, ([folderi, fvideo, file, args, s, cptdone, cpttodo, todoparam, minimgcount], queue))
+    job = pool.apply_async(mpimagemagick, ([folderi, fvideo, file, args, s, cptdone, cpttodo, todoparam, minimgcount, minfo], queue))
     jobs.append(job)
     if not (queue.full):
       log('Execute 1 thread in the BoucleFichiers', 1)
@@ -914,11 +930,11 @@ def mpCompareThread(leftrecords, queue):
     print(error)
 
   if not(exiterr):
-    limram = round(97 - 100 / threads)
+    limram = round(99 - 100 / threads)
     ramusage = psutil.virtual_memory().percent
     if ramusage > limram:
       time.sleep(120)
-      log(f"Thread {os.getpid()} neutralized 2mn due to RAM usage {ramusage}% > {limram}%. cpu: {psutil.cpu_percent(0.1)}%. You should diminish -threads value.", 1)
+      log(f"Thread {os.getpid()} neutralized 2mn due to RAM usage {ramusage}% > {limram}%. cpu: {psutil.cpu_percent(0.1)}%. You should diminish -threads value and/or force -blksize=n with smaller value.", 1)
 
     leftrecord = leftrecords[0]
     lastrecord = leftrecords[-1]
@@ -998,7 +1014,7 @@ def mpCompareThread(leftrecords, queue):
         s = s + f", d1 from {leftrecord[2]} to {lastrecord[2]}, d2 from {leftrecord[6]} to {lastrecord[6]}"
     current, peak = tracemalloc.get_traced_memory()
     # raminfo = f"Current memory usage {round(current / 1e6)} MB; Peak: {round(peak / 1e6)} MB"
-    s = f"Thread: Comparison found {nbfound:4} results for " + txtgreen + f"{len(leftrecords):3}" + txtnocolor + f" X {len(locdata):5} records " + s + f", in " + \
+    s = f"Thread: Comparison found{nbfound:4} results for " + txtgreen + f"{len(leftrecords):3}" + txtnocolor + f" X {len(locdata):6} records " + s + f", in " + \
         txtgreen + f"{duration(durnosql, False)}" + txtnocolor + f" for comparison and " + txtgreen + f"{duration(dursql,False)}" + txtnocolor + f" for SQL. RAM used {round(current / 1e6)} MB"
     # log(msg + '\n' + s, 3)
     log(s, 3)
@@ -1021,6 +1037,7 @@ def CompareSqlMain():
     if d0 < 800: limrec = 1000 * threads
     if d0 > 900: limrec = 2000 * threads
     if scaninorder: limrec = 10 * limrec
+    if maxdiff > 20: limrec = limrec // 10
     while (len(records) < limrec) and (d0 + step < 1729):       # 18 * 32 * 3 = 1728
       sql = 'SELECT Id, tsdupe, dist01, srcshortname, keyimg, dist00, dist02, dist03 FROM timages WHERE tsdupe<' + str(maxdiff) + ' AND dist00 = ' + str(d0 + step) + ' ORDER BY tsdupe, dist01, dist02, dist03;'
       log(sql, 3)
@@ -1066,9 +1083,10 @@ def CompareSqlMain():
   maxtsdupe = int(SQLexec("SELECT MAX(tsdupe) FROM timages;", True, 3))
   msg = ""
   scaninorder = False
-  if (prevscaninorder == maxtsdupe) and (maxdiff > maxtsdupe):
+  if (prevscaninorder <= maxtsdupe) and (maxdiff > maxtsdupe):
     scaninorder = True
     SQLexec("UPDATE tparam SET paramvalue='" + str(maxdiff) + "' WHERE paramkey='scaninorder';")
+    conn.commit()
     msg = f"First comparison with maxdiff={maxdiff}. "
   if (prevscaninorder == maxtsdupe) and (maxdiff == maxtsdupe):
     scaninorder = True
@@ -1106,6 +1124,7 @@ def CompareSqlMain():
 
   loadrecords()
   d0 = int(records[0][5])
+  maxram = psutil.virtual_memory().percent
 
   while not(finished):
     SQLexec("INSERT INTO tparam (paramkey, paramvalue) VALUES('d0min','" + str(d0) + "') ON CONFLICT (paramkey) DO NOTHING;", False, 2)
@@ -1114,12 +1133,18 @@ def CompareSqlMain():
         # print('Rename ' + file.name + ' in ' + file.name[:-3])
         os.rename(folderimg + file.name, folderimg + file.name[:-3])
 
-    # current, peak = tracemalloc.get_traced_memory()
-    # raminfo = f"Current memory usage {round(current / 1e6)} MB; Peak: {round(peak / 1e6)} MB"
-    log(f"CompareSqlMain - Cached in RAM data with dist00 from {d0} to {maxleft}, ie {len(records):_d} records. ", 1)
+    log("CompareSqlMain - Cached in RAM data with dist00 from " + txtgreen + f"{d0}" + txtnocolor + " to " + txtgreen + f"{maxleft}" + txtnocolor + f", ie {len(records):_d} records. ", 1)
     displaythreshold = 100
 
-    pool = multiprocessing.Pool(threads + 1)
+    if maxram > 95:
+      nbthr = int(threads / maxram * 95)
+      if nbthr < 1: nbthr = 1
+      log(f"Due to RAM usage, create a pool of{txtgreen} {nbthr} {txtnocolor}threads. maxram={maxram}%")
+    else:
+      nbthr = threads
+      if nbthr < 1: nbthr = 1
+      log(f'Create a pool of{txtgreen} {nbthr} {txtnocolor}threads. maxram = {maxram}%')
+    pool = multiprocessing.Pool(nbthr)
     # put listener to work first
     watcher = pool.apply_async(listener, args=(queue,), )
     jobs = []
@@ -1136,30 +1161,35 @@ def CompareSqlMain():
     # Change blksize parameter based on your RAM, CPU and dataset. Try to have max CPU but keep RAM<80% and SQL disk usage<80%
     # Scaninorder means 1st comparison and it uses 16 times less RAM due to optimisations (compare 1 images only to images with dist00,01,02 and 03>=current one)
     # A thread is called to compare <blksize> images and 1 query load the possible images to compare them: if too hi query contains non corresponding images, if too low there is too much SQL queries.
+    comment = ""
+    blksize02 = 3000000 / batchreccount
+    if maxleft > d0 + 1:
+      if scaninorder:
+        blksize02 = blksize02 * ((maxleft - d0 + 1) ** 1.5)
+      else:
+        blksize02 = blksize02 * ((maxleft - d0 + 1))
+    blksize02 = blksize02 * 90 / pow(maxdiff, 1.5);
+    if maxram > 95:
+      blksize02 = blksize02 / 2
+    if blksize < 99:
+      comment = f"Should be {blksize02} but -blksize set in command line. "
+      blksize02 = min(blksize02, blksize)
+    if blksize02 < 2: blksize02 = 1
+    blksize02 = round(blksize02, 0)
+    blksize01 = round(blksize02 / 5, 0)
+    if blksize01 < 1: blksize01 = 0
     if scaninorder:
-      blksize02 = 5
-      blksize01 = 5
-      if maxleft > d0: blksize02 = 10
-      if maxleft > d0 + 1: blksize02 = 20
-      if (d0 > 900) or (d0 < 800):
-        blksize02 = blksize02 + 10
-        blksize01 = blksize01 + 5
-      if maxleft > d0 + 5: blksize02 = 100
-      if (maxleft > d0 + 15) and (d0 < 700 or d0 > 950):
-        blksize02 = 500
-        blksize01 = 25
+      comment = "Scaninorder. " + comment
     else:
-      blksize02 = 4
+      comment = "Not scaninorder. "
+      blksize02 = 0
       blksize01 = 0
-      if (d0 > 900) or (d0 < 700):
-        blksize02 = blksize02 + 3
-        if maxleft > d0 + 15:
-          blksize02 = blksize02 + 3
-        #   blksize01 = blksize01 + 1
 
-    log(f"dist00 from {d0} to {maxleft} => minimal blksize01 = {blksize01}, blksize02 = {blksize02}", 1)
+    log(f"dist00 from {txtgreen}{d0}{txtnocolor} to {txtgreen}{maxleft}{txtnocolor} => minimal blksize01 = {txtgreen}{blksize01}{txtnocolor}, blksize02 = {txtgreen}{blksize02}{txtnocolor}. maxram = {maxram}%. " + comment, 1)
     nbjobs = 0
     for leftrecord in records:
+      ramusg = psutil.virtual_memory().percent
+      if ramusg > maxram: maxram = ramusg
       rupture = False
       if ((len(recblock) > 0) and (leftrecord[5] != prev00)) or ((len(recblock) > blksize01) and (leftrecord[2] != prev01)) or ((len(recblock) > blksize02) and (leftrecord[6] != prev02)):
         log(f"Split in blocks if (({len(recblock)} > 0) and ({leftrecord[5]} != {prev00})) or (({len(recblock)} > {blksize01}) and ({leftrecord[2]} != {prev01})) or (({len(recblock)} > {blksize02}) and ({leftrecord[6]} != {prev02}))", 3)
@@ -1169,9 +1199,6 @@ def CompareSqlMain():
         jobs.append(job)
         nbjobs = nbjobs + 1
         time.sleep(0.1)     # to avoid a crash with simultaneous requests (psycopg2.errors.InsufficientResources: too many dynamic shared memory segments)
-        # while psutil.virtual_memory().percent > 80:
-        #   time.sleep(1)
-        #   log(f'CompareSqlMain: Wait 1s before adding a new job to wait for RAM usage < 80%. Already {nbjobs} jobs in pipe', 3)
         if not (queue.full):
           log('Execute 1 thread in the CompareSqlMain. Job queue len = ' + str(len(jobs)), 1)
           jobs[jobcounter].get()
@@ -1200,15 +1227,15 @@ def CompareSqlMain():
     if maxleft == d0max: finished = True
 
     while jobcounter < len(jobs):
+      ramusg = psutil.virtual_memory().percent
+      if ramusg > maxram: maxram = ramusg
       if (len(jobs) - jobcounter) % (threads * displaythreshold) == 0:
-        # current, peak = tracemalloc.get_traced_memory()
-        # raminfo = f"Current memory usage {round(current / 1e6)} MB; Peak: {round(peak / 1e6)} MB"
         raminfo = f"cpu: {psutil.cpu_percent(0.1)}%, RAM: {psutil.virtual_memory().percent}%, available {round(psutil.virtual_memory().available/1073741824)} Gb / {round(psutil.virtual_memory().total/1073741824)} Gb"
         log(f"Wait for {(len(jobs) - jobcounter):4} jobs to finish. " + raminfo, 1)
 
       jobs[jobcounter].get()
       jobcounter = jobcounter + 1
-    log(f"End of CompareSqlMain loop. {duration(time.time() - tstartthr, False)} for {batchreccount} records finished. Changing memory cache.", 1)
+    log(f"End of CompareSqlMain loop.{txtgreen} {duration(time.time() - tstartthr, False)} {txtnocolor}for {batchreccount} records finished. Changing memory cache.", 1)
     queue.put('kill')
     pool.close()
 
@@ -1348,6 +1375,7 @@ def UnwantedMain():
 
 
 def UnwantedPairs():
+  fn = ''
   for file in os.scandir(folderuw):
     fn = file.name
     if fn[-4:] == '.txt':
@@ -1358,15 +1386,28 @@ def UnwantedPairs():
         srcshortname1 = srcshortname1[:-1]
         srcshortname2 = fp.readline()
         srcshortname2 = srcshortname2[:-1]
-        sql = "DELETE FROM timagedupes D USING timages I1, timages I2 WHERE D.idimage1=I1.id AND D.idimage2=I2.id AND I1.srcshortname='" + srcshortname1 + "' AND I2.srcshortname='" + srcshortname2 + "';"
+        if srcshortname1 < srcshortname2:
+          sql = "INSERT INTO tpairsuw (srcshortname1, srcshortname2) VALUES ('" + srcshortname1 + "', '" + srcshortname2 + "');"
+        else:
+          sql = "INSERT INTO tpairsuw (srcshortname1, srcshortname2) VALUES ('" + srcshortname2 + "', '" + srcshortname1 + "');"
         SQLexec(sql)
-        sql = "DELETE FROM timagedupes D USING timages I1, timages I2 WHERE D.idimage1=I1.id AND D.idimage2=I2.id AND I2.srcshortname='" + srcshortname1 + "' AND I1.srcshortname='" + srcshortname2 + "';"
-        SQLexec(sql)
+        # sql = "DELETE FROM timagedupes D USING timages I1, timages I2 WHERE D.idimage1=I1.id AND D.idimage2=I2.id AND I1.srcshortname='" + srcshortname1 + "' AND I2.srcshortname='" + srcshortname2 + "';"
+        # SQLexec(sql)
+        # sql = "DELETE FROM timagedupes D USING timages I1, timages I2 WHERE D.idimage1=I1.id AND D.idimage2=I2.id AND I2.srcshortname='" + srcshortname1 + "' AND I1.srcshortname='" + srcshortname2 + "';"
+        # SQLexec(sql)
       else:
         log(txtred + 'ERROR: ' + txtnocolor + 'Bad structure of file ' + fn + ': lgn[:10] = ' + lgn[:10], 1)
       fp.close()
-      log(f"os.remove({folderuw} + {fn})", 3)
-      os.remove(folderuw + fn)
+      # log(f"os.remove({folderuw} + {fn})", 3)
+      # os.remove(folderuw + fn)
+  if fn != '':
+    SQLexec('SELECT COUNT(*) FROM tpairsuw;', True)
+    SQLexec('CREATE TABLE IF NOT EXISTS tpairsuwtmp (Id SERIAL NOT NULL PRIMARY KEY, srcshortname1 TEXT, srcshortname2 TEXT);')
+    SQLexec('INSERT INTO tpairsuwtmp (srcshortname1, srcshortname2) SELECT DISTINCT srcshortname1, srcshortname2 FROM tpairsuw;')
+    SQLexec('DROP TABLE tpairsuw;')
+    SQLexec('ALTER TABLE tpairsuwtmp RENAME TO tpairsuw;')
+    SQLexec('SELECT COUNT(*) FROM tpairsuw;', True)
+    conn.commit()
 
 
 def SQLclean():
@@ -1384,20 +1425,19 @@ def SQLclean():
 
   if (speed < 3) and not(sameresult):
     log('************************************************************************', 1)
-    log('*               PRESS ESC TO ABORT (skipped with speed=3)              *', 0)
-    log('************************************************************************', 1)
-    if not (StopAsked()) and (speed == 1 or step3):
+    # log('*               PRESS ESC TO ABORT (skipped with speed=3)              *', 0)
+    # log('************************************************************************', 1)
+    if speed == 1 or step2 or step3:
       log('', 0)
       log(txtgreen + 'Clean database of duplicates and obsolete in timages' + txtnocolor, 0)
       SQLexec('SELECT COUNT(*) FROM timages;', True)
       SQLexec('DELETE FROM timages WHERE Id IN (SELECT MIN(id) FROM timages GROUP BY srcshortname, imgshortname HAVING count(*) > 1);')
       conn.commit()
-    if not (StopAsked()) and (speed == 1 or step3):
       SQLexec("DELETE FROM timages WHERE id IN (SELECT timages.Id FROM timages LEFT JOIN tsources ON timages.srcshortname=tsources.srcshortname WHERE tsources.srcshortname IS NULL);")
       conn.commit()
       SQLexec('SELECT COUNT(*) FROM timages;', True)
 
-    if not (StopAsked()):
+    if speed == 1 or step3:
       SQLexec('SELECT COUNT(*) FROM timagedupes;', True)
       SQLexec('CREATE TABLE timagedupestmp (idimage1 INTEGER, idimage2 INTEGER, dist INTEGER);')
       SQLexec('INSERT INTO timagedupestmp (idimage1, idimage2, dist) SELECT idimage1, idimage2, min(dist) FROM timagedupes ti, timages i1, timages i2 '
@@ -1405,7 +1445,6 @@ def SQLclean():
       SQLexec('DROP TABLE timagedupes;')
       SQLexec('ALTER TABLE timagedupestmp RENAME TO timagedupes;')
       conn.commit()
-    if not (StopAsked()):
       SQLexec('CREATE INDEX IF NOT EXISTS idx_timagedupes_id1 ON public.timagedupes USING btree (idimage1 ASC NULLS LAST) TABLESPACE pg_default;')
       SQLexec('CREATE INDEX IF NOT EXISTS idx_timagedupes_id2 ON public.timagedupes USING btree (idimage2 ASC NULLS LAST) TABLESPACE pg_default;')
       SQLexec('SELECT COUNT(*) FROM timagedupes;', True)
@@ -1428,10 +1467,8 @@ def SQLanalyse():
   else:
     if not (StopAsked()):
       log('', 0)
-      log('***********************************************', 0)
-      log('*            PRESS ESC TO ABORT               *', 0)
-      log('***********************************************', 0)
-      log('', 0)
+      # log('***********************************************', 0)
+      # log('', 0)
       log('Create, populate and remove duplicate of pair of images with source and image names, limiting to specific distance', 0)
       SQLexec('SELECT COUNT(*) FROM tmpimgpairs;', True)
       SQLexec('DROP TABLE IF EXISTS tmpimgpairs;')
@@ -1458,15 +1495,15 @@ def SQLanalyse():
     if not (StopAsked()):
       SQLexec('CREATE INDEX idx_tmpimgpairs ON tmpimgpairs (Lsrcshortname, Rsrcshortname) TABLESPACE pg_default;')
       conn.commit()
+      SQLexec('SELECT COUNT(*) FROM tmpimgpairs;', True)
+      SQLexec('DELETE FROM tmpimgpairs T USING tpairsuw P WHERE T.Lsrcshortname = P.srcshortname1 AND T.Rsrcshortname = P.srcshortname2;')
     if not (StopAsked()):
       SQLexec('SELECT COUNT(*) FROM tmpimgpairs;', True)
 
     if not (StopAsked()):
       log('', 0)
-      log('***********************************************', 0)
-      log('*            PRESS ESC TO ABORT               *', 0)
-      log('***********************************************', 0)
-      log('', 0)
+      # log('***********************************************', 0)
+      # log('', 0)
       log('Create a table to reference pairs of source with an Id', 0)
       SQLexec('SELECT COUNT(*) FROM tmppairsofsources;', True)
       SQLexec('DROP TABLE IF EXISTS tmppairsofsources;')
@@ -1505,6 +1542,11 @@ def SQLanalyse():
     log(sql, 1)
     cur.execute(sql)
     records = cur.fetchall()
+    if os.path.isdir(folderrs + 'dupesrc'):
+      shutil.rmtree(folderrs + 'dupesrc')
+    if os.path.isdir(folderrs + 'dupesrc'):
+      log(txtred + 'ERROR: ' + txtnocolor + 'Folder removal of ' + folderrs + 'dupesrc' + ' did not worked.')
+      halt
     os.mkdir(folderrs + 'dupesrc')
     log('Found: ' + str(len(records)) + ' files to copy in ' + folderrs + 'dupesrc', 1)
     previd = [[]]
@@ -1527,7 +1569,7 @@ def SQLanalyse():
             fp.close()
           log('os.mkdir(' + folderrs + 'dupesrc/' + str(row[0]), 3)
           os.mkdir(folderrs + 'dupesrc/' + str(row[0]))
-          if (row != records[0]) and ((cptsrc < 2) or (cptimg < 2*minimg)):
+          if (row != records[0]) and (not((cptsrc > 1) or nosrccp) or (cptimg < 2*minimg)):
             log(f"Candidate failed to respect conditions: cptsrc={cptsrc}, ctpimg={cptimg}. Removing dupesrc/" + str(previd[0]), 1)
             shutil.rmtree(folderrs + 'dupesrc/' + str(previd[0]))
           cptsrc = 0
@@ -1549,7 +1591,22 @@ def SQLanalyse():
               cptsrc = cptsrc + 1
           prevsrc = row[1]
           srclst.append(row[1])
-      if (cptsrc < 2) or (cptimg < 2 * minimg):
+      if len(srclst) == 2:
+        # print(srclst)
+        fname = folderrs + 'dupesrc/' + str(previd[0]) + '/nb_match.' + srclst[0] + '.' + srclst[1] + '.txt'
+        # print(fname)
+        fp = open(fname, 'w')
+        fp.write('To move in ' + folderuw + ' to remove this pair from future comparison :\n')
+        fp.write(srclst[0] + '\n')
+        fp.write(srclst[1] + '\n')
+        fp.write('#\n')
+        sql = "SELECT dist, Lsrcshortname, Limgshortname, Rsrcshortname, Rimgshortname FROM tmpimgpairs WHERE Lsrcshortname='" + srclst[0] + "' AND Rsrcshortname='" + srclst[1] + "';"
+        cur.execute(sql)
+        impairs = cur.fetchall()
+        for ip in impairs:
+          fp.write(str(ip[0]) + ' between ' + ip[1] + '/' + ip[2] + ' and ' + ip[3] + '/' + ip[4] + '\n')
+        fp.close()
+      if not((cptsrc > 1) or nosrccp) or (cptimg < 2 * minimg):
         log(f"Candidate failed to respect conditions: cptsrc={cptsrc}, ctpimg={cptimg}. Removing dupesrc/" + str(previd[0]), 1)
         shutil.rmtree(folderrs + 'dupesrc/' + str(previd[0]))
     log('Copied ' + str(nbcandidate) + ' candidates into ' + folderrs + 'dupesrc', 0)
@@ -1600,7 +1657,7 @@ def SQLanalyse():
 def helpprt():
   log('************************************************************************************', 0)
   log('Video DeDup : find video duplicates', 0)
-  log('Copyright (C) 2020  Pierre Crette ' + version, 0)
+  log('Copyright (C) 2021  Pierre Crette ' + version, 0)
   log('', 0)
   log('This program is free software: you can redistribute it and/or modify', copyright)
   log('it under the terms of the GNU General Public License as published by', copyright)
@@ -1628,15 +1685,19 @@ def helpprt():
   log('-log=file      Log file', copyright)
   log('', copyright)
   log('STEP 1: ANALYSE', copyright)
+  log('  Speed=3 to consider sources with not yet any image; Speed=2 to consider all sources; Speed=1 add a long control of jpeg images count before creating new ones.', copyright)
   log('-fps=n         fps: take 1 picture each n seconds. Default fps=1/60 ie 1 picture every 60 seconds.', copyright)
   log('-limffmpeg=n   Percentage of image created by ffmpeg to consider enough. Default=99', copyright)
   log('-noffmpeg      Skip ffmpeg. Useful when some cannot achieve the 99% image creation', 0)
-  log('-delparam      Delete param.txt if number of jpeg images < limffmpeg set', 0)
+  log('-delparam      Delete param.txt if number of jpeg images < limffmpeg set. Works only if speed=1', 0)
   log('', copyright)
   log('STEP 2: COMPARE', copyright)
+  log('  Speed=2 add SQL cleanup before comparison; Speed=1 remove unwanted before.', copyright)
   log('-maxdiff=n     Difference between 2 images to consider them similar. Distance = number of bits differents in a 32x18x3 key. Range from 0 to 1728.', copyright)
+  log('-blksize=n     Technical parameter for comparison cache. No functional impact. RAM usage impact. Use this to override dynamic value.', copyright)
   log('', copyright)
   log('STEP 3: ANALYSE', copyright)
+  log('  Speed=1 add a last step of finding exact repetition in 3 or more sources.', copyright)
   log('-minimg=n      (*) Minimum number of similar images to declare a pair of source as duplicate.', copyright)
   log('-uw=folder     Unwanted images and sourceduplicates folder. default is folderimage/unwanted. Jpeg will be erased, use copies!', copyright)
   log('-maxdiffuw=n   Max distance between an image and an unwanted to remove the image (sql and jpeg). Default=0', copyright)
@@ -1669,6 +1730,7 @@ if __name__ == '__main__':
     print(error)
 
   tmp = '/tmp/' + pid + '/'
+  print(sys.argv)
   for i in sys.argv[1:]:
     log('arg: ' + i, 2)
     if i[:5] == '-src=':
@@ -1713,6 +1775,9 @@ if __name__ == '__main__':
       i = ''
     if i[:7] == '-speed=':
       speed = int(i[7:])
+      i = ''
+    if i[:9] == '-blksize=':
+      blksize = int(i[9:])
       i = ''
     if i[:11] == '-limffmpeg=':
       limffmpeg = int(i[11:])
@@ -1785,10 +1850,10 @@ if __name__ == '__main__':
   log('folderimg   : ' + folderimg, copyright)
   log('folderuw    : ' + folderuw, copyright)
   log('folderrs    : ' + folderrs, copyright)
-  log('fps         : ' + str(fpsn), copyright)
+  log('fps         : 1 image every ' + str(fpsn) + ' second', copyright)
   if noffmpeg: log('noffmpeg set', copyright)
   if sameresult: log('sameresult set', copyright)
-  log('limffmpeg   = ' + str(limffmpeg), copyright)
+  log('limffmpeg   = ' + str(limffmpeg) + '%', copyright)
   if delparam: log('delparam set. param.txt will be erased and ffmpeg rerun when not limffmpeg jpeg images files.')
   log('maxdiff     = ' + str(maxdiff), copyright)
   log('maxdiffuw   = ' + str(maxdiffuw), copyright)
@@ -1847,9 +1912,8 @@ if __name__ == '__main__':
   smm = SharedMemoryManager()
   smm.start()  # Start the process that manages the shared memory blocks
 
-  if speed < 3:
-    log('Cleanup in SQL tables (skipped with speed=3):')
-    SQLclean()
+  log('Cleanup in SQL tables (skipped with speed=3):')
+  SQLclean()
 
   # Step 1: Delete obsolete images
   if step1:
@@ -1859,10 +1923,6 @@ if __name__ == '__main__':
     log(txtgreen + 'Parse sources to build missing images' + txtnocolor, 0)
     # BoucleFichiers(foldervideo, folderimg, 'parse', level)
     Parse()
-
-    if speed == 1:
-      SQLexec("DELETE FROM timages WHERE keyimg='0';", 0)
-
     cur.close()
     conn.commit()
     cur = conn.cursor()
@@ -1873,30 +1933,27 @@ if __name__ == '__main__':
     log('', 0)
     log(' ' + txtgreen + 'STEP 2: ' + txtnocolor + ' ' + foldervideo, 0)
     log('************************************************************************************', 0)
-
+    if speed == 1:
+      log(txtgreen + 'Unwanted images analysis ' + txtnocolor + folderrs)
+      UnwantedMain()
     log(txtgreen + 'Compare images together to find similar ones' + txtnocolor, 0)
     CompareSqlMain()
-
     log(txtgreen + 'Step2 done comparison of images in ' + txtnocolor + folderimg +  ': ' + str(cptdone) + ' / ' + str(cpttodo), 0)
 
   if step3:
     log('', 0)
     log(' ' + txtgreen + 'STEP 3: ' + txtnocolor + ' ' + foldervideo, 0)
     log('************************************************************************************', 0)
-
     log(txtgreen + 'Unwanted images analysis ' + txtnocolor + folderrs)
-    if not (StopAsked()):
-      UnwantedPairs()
-    if not (StopAsked()):
-      UnwantedMain()
-
+    UnwantedPairs()
+    UnwantedMain()
     log(txtgreen + 'Analyse results with SQL requests and copy duplicate candidates in ' + txtnocolor + folderrs)
     if not (StopAsked()):
       SQLanalyse()
 
   log('', 0)
   if StopAsked():
-    log(txtgreen + 'ESC ' + txtnocolor + 'key was pressed. Stopped.', 0)
+    log(txtgreen + 'https://members.vixen.com/give-in ' + txtnocolor + 'key was pressed. Stopped.', 0)
   else:
     log(txtgreen + 'FINISH' + txtnocolor, 0)
   cur.close()
