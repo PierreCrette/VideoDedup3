@@ -31,7 +31,7 @@ import gc
 import psutil
 
 # Declarations
-version = 'VideoDedup v3.4.007'
+version = 'VideoDedup v3.4.009 01/06/2021'
 test = True
 debug = 1
 copyright = 0
@@ -53,7 +53,7 @@ sameresult = False
 nosrccp = False
 delparam = False
 stopaskedflag = False
-# RAMoptimization = False
+ramsparing = False
 sqldb = ''
 sqlbak = ''
 step0 = False
@@ -105,7 +105,8 @@ def duration(d, dat=True):
   else:
     r = '{:05.2f}'.format(s) + ' s'
   if dat:
-    r = txtgreen + time.asctime(time.localtime(time.time())) + txtnocolor + ' ' + r
+    # r = txtgreen + time.asctime(time.localtime(time.time())) + txtnocolor + ' ' + r
+    r = txtgreen + time.strftime("%d %H:%M:%S") + txtnocolor + ' ' + r
   return r
 
 
@@ -170,7 +171,7 @@ def SQLexec(sql, displayresult=False, threshold=1):
     try:
       cur.execute(sql)
     except (Exception, psycopg2.DatabaseError) as error:
-      print('ERROR cannot execute: ' + sql)
+      print('ERROR in SQLexec, cannot execute: ' + sql)
       print(error)
       sys.exit(1)
     if displayresult:
@@ -179,7 +180,7 @@ def SQLexec(sql, displayresult=False, threshold=1):
         log(str(row), threshold)
         return row[0]
       except(Exception, psycopg2.DatabaseError) as error:
-        print('ERROR cannot get result of: ' + sql)
+        print('ERROR in SQLexec, cannot get result of: ' + sql)
         print(error)
         return 0
 
@@ -221,55 +222,41 @@ def SQLscript(filename, threshold=1):
   locperf = time.time()
   ok = True
   scrcur = conn.cursor()
-  if ok and os.path.exists(filename):
+  if os.path.exists(filename):
     if os.path.getsize(filename) < 3:
       log('Empty file. Removing ' + filename, threshold)
       os.remove(filename)
     else:
       fp = open(filename, 'r')
-      sql = reqform(fp.readline())
-      linenb = 1
-      if (sql[:6] == 'INSERT') or (sql[:6] == 'UPDATE')  or (sql[:6] == 'DELETE'):
-        # log('Loading ' + filename + ' in sql', 3)
-        lastreq = time.time()
-        # log(filename + ' line #' + f"{linenb:_d} " + ' Start: ' + sql[:55] + ' (' + str(len(sql)) + ')', 3)
-        try:
-          if len(sql) > 0:
-            scrcur.execute(sql)
-        except (Exception, psycopg2.DatabaseError) as error:
-          print(error)
-          ok = False
-        #   log(txtred + 'ERROR: ' + txtnocolor + 'SQL query of line ' + str(linenb) + ' malformed. Removing it', 0)
-        #   print(sql)
-        while sql and ok:
-          dur = time.time() - locperf
-          durreq = time.time() - lastreq
-          if (dur > 30 * (threshold + 1)) or (durreq > 2 * (threshold + 1)):
-            log('SQLscript ' + filename + ' line #' + f"{linenb:_d} " + ': ' + sql[:55] + ' [' + str(len(sql)) + '] executed in ' + duration(durreq, False) + ', total time: ' + duration(dur, False), 1)
-          # if (linenb % 1000000 == 0): log(f"{linenb:_d}" + ' lines executed yet. Current: ' + sql, threshold)
-          # log(filename + ' line #' + f"{linenb:_d} " + ' DONE: ' + sql[:55] + ' [' + str(len(sql)) + '] executed in ' + duration(durreq, False) + ', total time: ' + duration(dur, False), 3)
-          sql = reqform(fp.readline())
-          linenb = linenb + 1
-
-          lastreq = time.time()
-          # log(filename + ' line #' + f"{linenb:_d} " + ' Start: ' + sql[:55] + ' (' + str(len(sql)) + ')', 3)
-          try:
-            if len(sql) > 0:
+      lines = fp.readlines()
+      fp.close()
+      linenb = 0
+      for line in lines:
+        sql = reqform(line)
+        if ok and len(sql)>0:
+          if (sql[:6] == 'INSERT') or (sql[:6] == 'UPDATE')  or (sql[:6] == 'DELETE'):
+            linenb = linenb + 1
+            lastreq = time.time()
+            try:
               scrcur.execute(sql)
-              # time.sleep(0.001)
-          except (Exception, psycopg2.DatabaseError) as error:
-            print(error)
+            except (Exception, psycopg2.DatabaseError) as error:
+              print(error)
+              ok = False
+            if ok:
+              dur = time.time() - locperf
+              durreq = time.time() - lastreq
+              if (dur > 30 * (threshold + 1)) or (durreq > 2 * (threshold + 1)):
+                log('SQLscript ' + filename + ' line #' + f"{linenb:_d} " + ': ' + sql[:55] + ' [' + str(len(sql)) + '] executed in ' + duration(durreq, False) + ', total time: ' + duration(dur, False), 1)
+          else:
+            log(txtred + 'ERROR ' + txtnocolor + 'in script ' + filename + '. Not starting by SQL instruction: (' + str(linenb) + ') ' + sql, 0)
             ok = False
 
-        fp.close()
-        # scrconn.commit()
-        conn.commit()
-        scrcur.close()
-        # scrconn.close()
-        log('Removing ' + filename, threshold)
-        os.remove(filename)
-      else:
-        log(txtred + 'ERROR: ' + txtnocolor + 'Script ' + filename + ' is not starting by SQL instruction: ' + sql[:6], 0)
+      # scrconn.commit()
+      conn.commit()
+      scrcur.close()
+      # scrconn.close()
+      log('Removing ' + filename, threshold)
+      os.remove(filename)
 
   dur = time.time() - locperf
   log('SQLscript(' + filename + '): in ' + duration(dur, False), 2)
@@ -303,14 +290,6 @@ def IsVideo(extention=''):
   return ((extention == '.MP4') or (extention == '.AVI') or (extention == '.MOV') or (extention == '.M4V') or (extention == '.VOB')
           or (extention == '.MPG') or (extention == '.MPEG') or (extention == '.MKV') or (extention == '.WMV') or (extention == '.ASF')
           or (extention == '.FLV') or (extention == '.RM') or (extention == '.OGM') or (extention == '.M2TS') or (extention == '.RMVB'))
-
-
-# def on_release(key):
-#   global stopaskedflag
-#   # print('{0} released'.format(key))
-#   if key == keyboard.Key.esc:
-#     # Stop listener
-#     stopaskedflag = True
 
 
 def StopAsked():
@@ -775,10 +754,10 @@ def Parse():
           jpegcount = len(fnmatch.filter(os.listdir(folderi2), '*.jpg'))
           if (jpegcount < (limffmpeg * minfo / 100)) or (jpegcount == 0):
             if delparam:
-              log('WARNING: Not enough jpeg for ' + txtgreen + folderi2 + txtnocolor + ' (' + str(jpegcount) + '/' + str(minfo) + ', ' + str(round(100 * jpegcount / minfo)) + '%). Delete param.txt.', 0)
+              log('WARNING: Not enough jpeg for ' + txtgreen + folderi2 + txtnocolor + ' (' + str(jpegcount) + '/' + str(minfo) + ', ' + txtgreen + str(round(100 * jpegcount / minfo)) + '%' + txtnocolor + '). Delete param.txt.', 0)
               os.remove(folderi2 + '/param.txt')
             else:
-              log('WARNING: Not enough jpeg for ' + txtgreen + folderi2 + txtnocolor + ' (' + str(jpegcount) + '/' + str(minfo) + ', ' + str(round(100 * jpegcount / minfo)) + '%). Use -delparam or delete param.txt manually to relaunch ffmpeg.', 0)
+              log('WARNING: Not enough jpeg for ' + txtgreen + folderi2 + txtnocolor + ' (' + str(jpegcount) + '/' + str(minfo) + ', ' + txtgreen + str(round(100 * jpegcount / minfo)) + '%' + txtnocolor + '). Use -delparam or delete param.txt manually to relaunch ffmpeg.', 0)
       row = cur.fetchone()
   if speed < 3:
     cur.execute("SELECT srcshortname, srcfld, imgfld, recordcount FROM tsources ORDER BY srcshortname;")
@@ -916,7 +895,7 @@ def listener(queue):
 
 
 def mpCompareThread(leftrecords, queue):
-  global scaninorder
+  global scaninorder, ramsparing
 
   # All leftrecords in a single threads have the same dist00, dist01 and tsdupe => We can load possible rightrecords once
   exiterr = False
@@ -930,12 +909,6 @@ def mpCompareThread(leftrecords, queue):
     print(error)
 
   if not(exiterr):
-    limram = round(99 - 100 / threads)
-    ramusage = psutil.virtual_memory().percent
-    if ramusage > limram:
-      time.sleep(120)
-      log(f"Thread {os.getpid()} neutralized 2mn due to RAM usage {ramusage}% > {limram}%. cpu: {psutil.cpu_percent(0.1)}%. You should diminish -threads value and/or force -blksize=n with smaller value.", 1)
-
     leftrecord = leftrecords[0]
     lastrecord = leftrecords[-1]
     if scaninorder:
@@ -948,6 +921,7 @@ def mpCompareThread(leftrecords, queue):
       d1inf = leftrecord[2] - maxdiff
       d2inf = leftrecord[6] - maxdiff
       d3inf = leftrecord[7] - maxdiff
+    d0max = lastrecord[5] + maxdiff
     d1max = lastrecord[2] + maxdiff
     d2max = lastrecord[6] + maxdiff
     d3max = lastrecord[7] + maxdiff
@@ -958,51 +932,68 @@ def mpCompareThread(leftrecords, queue):
       print(lastrecord)
       halt
 
-    sqlin = "SELECT Id, tsdupe, dist01, srcshortname, keyimg, dist00, dist02, dist03 FROM timages WHERE dist00 >= " + str(d0inf) + " AND dist00 <= " + str(leftrecord[5] + maxdiff)
-    sqlin = sqlin + " AND dist01 >= " + str(d1inf) + " AND dist01 <= " + str(d1max)
-    optimdist2 = False
-    optimdist3 = False
-    if leftrecord[2] == lastrecord[2]:  # same dist01 also across the dataset for this thread
-      sqlin = sqlin + " AND dist02 >= " + str(d2inf) + " AND dist02 <= " + str(d2max)
-      optimdist2 = True
-      if leftrecord[6] == lastrecord[6]:  # same dist02 also across the dataset for this thread, then dist03 is ordered. Else no filter on dist03 possible.
-        sqlin = sqlin + " AND dist03 >= " + str(d3inf) + " AND dist03 <= " + str(d3max)
-        optimdist3 = True
-    t1 = time.time()
-    mpcur.execute(sqlin)
-    locdata = mpcur.fetchall()
-    mpconn.close
-    t2 = time.time()
-    dursql = t2 - t1
-
     fp = open(folderimg + 'lid_' + str(os.getpid()) + '.sqltmp', 'a')
     nbfound = 0
-    for leftrecord in leftrecords:
-      sql = 'INSERT INTO timagedupes (idimage1,idimage2,dist) VALUES '
-      for rightrecord in locdata:                            # Id, tsdupe, dist01, srcshortname, keyimg, dist00, dist02, dist03
-        if rightrecord[3] != leftrecord[3]:
-          dist = 9999                                        # Embeded Ifs instead of and/or to optimize tests in this very center of the loops
-          if optimdist3:
-            dist = distanceham(int(leftrecord[4]), int(rightrecord[4]))
-          else:
-            if optimdist2:
-              if (rightrecord[7] > d3inf - 1) and (rightrecord[7] < d3max + 1):
-                dist = distanceham(int(leftrecord[4]), int(rightrecord[4]))
+    dursql = 0
+    durnosql = 0
+
+    if ramsparing:
+      d0maxloop = d0max
+    else:
+      d0maxloop = d0inf
+    for d00 in range(d0inf, d0maxloop + 1):
+      # if ramsparing, loop on Right records to load them partially in memory. Then loop on all Left records. All must be finished to declare images compared ie to set tsdupe value.
+      if ramsparing:
+        sqlin = "SELECT Id, tsdupe, dist01, srcshortname, keyimg, dist00, dist02, dist03 FROM timages WHERE dist00 = " + str(d00)
+      else:
+        sqlin = "SELECT Id, tsdupe, dist01, srcshortname, keyimg, dist00, dist02, dist03 FROM timages WHERE dist00 >= " + str(d0inf) + " AND dist00 <= " + str(d0max)
+      sqlin = sqlin + " AND dist01 >= " + str(d1inf) + " AND dist01 <= " + str(d1max)
+      optimdist2 = False
+      optimdist3 = False
+      if leftrecord[2] == lastrecord[2]:  # same dist01 also across the dataset for this thread
+        sqlin = sqlin + " AND dist02 >= " + str(d2inf) + " AND dist02 <= " + str(d2max)
+        optimdist2 = True
+        if leftrecord[6] == lastrecord[6]:  # same dist02 also across the dataset for this thread, then dist03 is ordered. Else no filter on dist03 possible.
+          sqlin = sqlin + " AND dist03 >= " + str(d3inf) + " AND dist03 <= " + str(d3max)
+          optimdist3 = True
+      t1 = time.time()
+      # log(f"sqlright debug sqlin={sqlin}")
+      mpcur.execute(sqlin)
+      # log(f"sqlright debug execute")
+      locdata = mpcur.fetchall()
+      # log(f"sqlright debug len(locdata)={len(locdata)}")
+      mpconn.close
+      t2 = time.time()
+      dursqlloc = time.time() - t1
+
+      for leftrecord in leftrecords:
+        sql = 'INSERT INTO timagedupes (idimage1,idimage2,dist) VALUES '
+        for rightrecord in locdata:  # Id, tsdupe, dist01, srcshortname, keyimg, dist00, dist02, dist03
+          if rightrecord[3] != leftrecord[3]:
+            dist = 9999  # Embeded Ifs instead of and/or to optimize tests in this very center of the loops
+            if optimdist3:
+              dist = distanceham(int(leftrecord[4]), int(rightrecord[4]))
             else:
-              if (rightrecord[6] > d2inf - 1) and (rightrecord[6] < d2max + 1):
+              if optimdist2:
                 if (rightrecord[7] > d3inf - 1) and (rightrecord[7] < d3max + 1):
                   dist = distanceham(int(leftrecord[4]), int(rightrecord[4]))
-          if dist <= maxdiff:
-            sql = sql + '(' + str(leftrecord[0]) + ',' + str(rightrecord[0]) + ',' + str(dist) + '),'
-            nbfound = nbfound + 1
+              else:
+                if (rightrecord[6] > d2inf - 1) and (rightrecord[6] < d2max + 1):
+                  if (rightrecord[7] > d3inf - 1) and (rightrecord[7] < d3max + 1):
+                    dist = distanceham(int(leftrecord[4]), int(rightrecord[4]))
+            if dist <= maxdiff:
+              sql = sql + '(' + str(leftrecord[0]) + ',' + str(rightrecord[0]) + ',' + str(dist) + '),'
+              nbfound = nbfound + 1
+        if len(sql) > 60:
+          fp.write(sql[:len(sql) - 1] + ';\n')
+        if leftrecord[1] < maxdiff:  # Update 'done' flag except if already set with higher value
+          sql = 'UPDATE timages set tsdupe=' + str(maxdiff) + ' WHERE Id=' + str(leftrecord[0]) + ';\n'
+          fp.write(sql + ';\n')
+      durnosqlloc = time.time() - t2
+      dursql = dursql + dursqlloc
+      durnosql = durnosql + durnosqlloc
+    fp.close
 
-      if len(sql) > 60:
-        fp.write(sql[:len(sql) - 1] + ';\n')
-      if leftrecord[1] < maxdiff:     # Update 'done' flag except if already set with higher value
-        sql = 'UPDATE timages set tsdupe=' + str(maxdiff) + ' WHERE Id=' + str(leftrecord[0]) + ';\n'
-        fp.write(sql)
-
-    durnosql = time.time() - t2
     leftrecord = leftrecords[0]
     s = "where d0=" + txtgreen + f"{leftrecord[5]}" + txtnocolor
     if optimdist3:
@@ -1019,37 +1010,36 @@ def mpCompareThread(leftrecords, queue):
     # log(msg + '\n' + s, 3)
     log(s, 3)
     if (debug > 1) and (nbfound > 0): print(s)
-    fp.close
-    del locdata
+    # del locdata
 
 
 def CompareSqlMain():
-  global nbrecordscached, pool, watcher, jobs, jobcounter
-  global records, maxleft, d0, scaninorder
+  global nbrecordscached, pool, watcher, jobs, jobcounter,  threads
+  global records, maxleft, d0, scaninorder, ramsparing
 
   def loadrecords():
     global records, maxleft, d0
 
     cur = conn.cursor()
     records = []
-    step = 0
+    step0 = 0
     limrec = 500 * threads
     if d0 < 800: limrec = 1000 * threads
     if d0 > 900: limrec = 2000 * threads
     if scaninorder: limrec = 10 * limrec
     if maxdiff > 20: limrec = limrec // 10
-    while (len(records) < limrec) and (d0 + step < 1729):       # 18 * 32 * 3 = 1728
-      sql = 'SELECT Id, tsdupe, dist01, srcshortname, keyimg, dist00, dist02, dist03 FROM timages WHERE tsdupe<' + str(maxdiff) + ' AND dist00 = ' + str(d0 + step) + ' ORDER BY tsdupe, dist01, dist02, dist03;'
+    while (len(records) < limrec) and (d0 + step0 < 1729):       # 18 * 32 * 3 = 1728
+      sql = 'SELECT Id, tsdupe, dist01, srcshortname, keyimg, dist00, dist02, dist03 FROM timages WHERE tsdupe<' + str(maxdiff) + ' AND dist00 = ' + str(d0 + step0) + ' ORDER BY tsdupe, dist01, dist02, dist03;'
       log(sql, 3)
       cur.execute(sql)
       row = cur.fetchone()
       while (row is not None):
         records.append(row)
         row = cur.fetchone()
-      step = step + 1
+      step0 = step0 + 1
     if len(records) == 0: maxleft = 1728
     else: maxleft = records[len(records) - 1][5]
-    log('Fetchall done. Returned ' + str(len(records)) + ' records. Dist00 range from ' + str(d0) + ' to ' + str(maxleft), 3)
+    log('End loadrecords. Returned ' + str(len(records)) + ' records. Dist00 range from ' + str(d0) + ' to ' + str(maxleft), 3)
 
   SQLexec("INSERT INTO tparam (paramkey, paramvalue) VALUES('threadid','0') ON CONFLICT (paramkey) DO UPDATE SET paramvalue = '0';", False, 2)
   log('Launch threads to compare each image from timages ordered by dist00 to others where:', 1)
@@ -1104,6 +1094,8 @@ def CompareSqlMain():
     log(txtred + 'ERROR: ' + txtnocolor + f"prevscaninorder = {prevscaninorder}, maxtsdupe = {maxtsdupe}, maxdiff = {maxdiff}. Not in a planned case. Either a bug or an error in parameters. "
                                           f"You have to update tparam and tsdupe in timages to solve the situation.", 0)
     sys.exit(1)
+  if not(scaninorder):
+    ramsparing = True
 
   minright = d0
   maxleft = -1
@@ -1138,11 +1130,12 @@ def CompareSqlMain():
 
     if maxram > 95:
       nbthr = int(threads / maxram * 95)
-      if nbthr < 1: nbthr = 1
+      if nbthr < 2: nbthr = 2
+      threads = nbthr
       log(f"Due to RAM usage, create a pool of{txtgreen} {nbthr} {txtnocolor}threads. maxram={maxram}%")
     else:
       nbthr = threads
-      if nbthr < 1: nbthr = 1
+      if nbthr < 2: nbthr = 2
       log(f'Create a pool of{txtgreen} {nbthr} {txtnocolor}threads. maxram = {maxram}%')
     pool = multiprocessing.Pool(nbthr)
     # put listener to work first
@@ -1166,43 +1159,40 @@ def CompareSqlMain():
     if maxleft > d0 + 1:
       if scaninorder:
         blksize02 = blksize02 * ((maxleft - d0 + 1) ** 1.5)
-      else:
-        blksize02 = blksize02 * ((maxleft - d0 + 1))
     blksize02 = blksize02 * 90 / pow(maxdiff, 1.5);
+    if blksize < 99:
+      comment = f"Should be {blksize02:.1f} but -blksize set in command line. "
+      blksize02 = blksize
     if maxram > 95:
       blksize02 = blksize02 / 2
-    if blksize < 99:
-      comment = f"Should be {blksize02} but -blksize set in command line. "
-      blksize02 = min(blksize02, blksize)
-    if blksize02 < 2: blksize02 = 1
     blksize02 = round(blksize02, 0)
     blksize01 = round(blksize02 / 5, 0)
-    if blksize01 < 1: blksize01 = 0
-    if scaninorder:
-      comment = "Scaninorder. " + comment
-    else:
-      comment = "Not scaninorder. "
+    if ramsparing or not(scaninorder):
       blksize02 = 0
       blksize01 = 0
 
     log(f"dist00 from {txtgreen}{d0}{txtnocolor} to {txtgreen}{maxleft}{txtnocolor} => minimal blksize01 = {txtgreen}{blksize01}{txtnocolor}, blksize02 = {txtgreen}{blksize02}{txtnocolor}. maxram = {maxram}%. " + comment, 1)
-    nbjobs = 0
+    tstartthrint = time.time()
+    maxram = 0
     for leftrecord in records:
       ramusg = psutil.virtual_memory().percent
       if ramusg > maxram: maxram = ramusg
-      rupture = False
       if ((len(recblock) > 0) and (leftrecord[5] != prev00)) or ((len(recblock) > blksize01) and (leftrecord[2] != prev01)) or ((len(recblock) > blksize02) and (leftrecord[6] != prev02)):
         log(f"Split in blocks if (({len(recblock)} > 0) and ({leftrecord[5]} != {prev00})) or (({len(recblock)} > {blksize01}) and ({leftrecord[2]} != {prev01})) or (({len(recblock)} > {blksize02}) and ({leftrecord[6]} != {prev02}))", 3)
-      # if ((len(recblock) > 0) and ((leftrecord[2] != prev01) or (leftrecord[6] != prev02))):
         # In a single thread all dist00, dist01 AND dist02 and tsdupe are the same
         job = pool.apply_async(mpCompareThread, (recblock, queue))
         jobs.append(job)
-        nbjobs = nbjobs + 1
         time.sleep(0.1)     # to avoid a crash with simultaneous requests (psycopg2.errors.InsufficientResources: too many dynamic shared memory segments)
         if not (queue.full):
           log('Execute 1 thread in the CompareSqlMain. Job queue len = ' + str(len(jobs)), 1)
           jobs[jobcounter].get()
           jobcounter = jobcounter + 1
+        if (time.time() - tstartthrint) > 900:
+          ramusg = psutil.virtual_memory().percent
+          if ramusg > maxram: maxram = ramusg
+          tstartthrint = time.time()
+          raminfo = f"cpu: {psutil.cpu_percent(0.1)}%, RAM: {psutil.virtual_memory().percent}%, available {round(psutil.virtual_memory().available / 1073741824)} Gb / {round(psutil.virtual_memory().total / 1073741824)} Gb"
+          log(f"{len(jobs)} threads started. " + raminfo, 1)
         recblock = []
       recblock.append(leftrecord)
       prev00 = leftrecord[5]
@@ -1214,30 +1204,38 @@ def CompareSqlMain():
       log('Execute 1 thread in the CompareSqlMain. Job queue len = ' + str(len(jobs)), 1)
       jobs[jobcounter].get()
       jobcounter = jobcounter + 1
+    # recblock.clear()  # DEBUG
     recblock = []
+    log(f'All {len(jobs)} threads are in queue. Waiting for completion...', 1)
 
-    log('Load result of previous threads in SQL database', 1)
     for file in os.scandir(folderimg):
       if file.name[-4:] == '.sql':
         # log('Loading: ' + folderimg + file.name, 1)
         SQLscript(folderimg + file.name, 3)
+    log('Load result of previous threads in SQL database done.', 1)
 
+    tstartthrint = time.time()
     d0 = maxleft + 1;
     loadrecords()
     if maxleft == d0max: finished = True
 
+    ramusg = psutil.virtual_memory().percent
+    if ramusg > maxram: maxram = ramusg
     while jobcounter < len(jobs):
-      ramusg = psutil.virtual_memory().percent
-      if ramusg > maxram: maxram = ramusg
-      if (len(jobs) - jobcounter) % (threads * displaythreshold) == 0:
+      # log(f"{jobcounter} / {len(jobs)} threads finished. " + raminfo, 1)
+      if (time.time() - tstartthrint) > 900:
+        ramusg = psutil.virtual_memory().percent
+        if ramusg > maxram: maxram = ramusg
+        tstartthrint = time.time()
         raminfo = f"cpu: {psutil.cpu_percent(0.1)}%, RAM: {psutil.virtual_memory().percent}%, available {round(psutil.virtual_memory().available/1073741824)} Gb / {round(psutil.virtual_memory().total/1073741824)} Gb"
-        log(f"Wait for {(len(jobs) - jobcounter):4} jobs to finish. " + raminfo, 1)
-
+        log(f"{round(100 * jobcounter / len(jobs))}% threads finished. " + raminfo, 1)
       jobs[jobcounter].get()
       jobcounter = jobcounter + 1
     log(f"End of CompareSqlMain loop.{txtgreen} {duration(time.time() - tstartthr, False)} {txtnocolor}for {batchreccount} records finished. Changing memory cache.", 1)
     queue.put('kill')
     pool.close()
+    # log('DEBUG: pool.join()')
+    pool.join()
 
   log(f"Compare ended", 1)
   SQLexec("UPDATE tparam SET paramvalue='" + str(maxdiff) + "' WHERE paramkey='scaninorder';")
@@ -1390,7 +1388,7 @@ def UnwantedPairs():
           sql = "INSERT INTO tpairsuw (srcshortname1, srcshortname2) VALUES ('" + srcshortname1 + "', '" + srcshortname2 + "');"
         else:
           sql = "INSERT INTO tpairsuw (srcshortname1, srcshortname2) VALUES ('" + srcshortname2 + "', '" + srcshortname1 + "');"
-        SQLexec(sql)
+        SQLexec(sql, False, 2)
         # sql = "DELETE FROM timagedupes D USING timages I1, timages I2 WHERE D.idimage1=I1.id AND D.idimage2=I2.id AND I1.srcshortname='" + srcshortname1 + "' AND I2.srcshortname='" + srcshortname2 + "';"
         # SQLexec(sql)
         # sql = "DELETE FROM timagedupes D USING timages I1, timages I2 WHERE D.idimage1=I1.id AND D.idimage2=I2.id AND I2.srcshortname='" + srcshortname1 + "' AND I1.srcshortname='" + srcshortname2 + "';"
@@ -1425,8 +1423,7 @@ def SQLclean():
 
   if (speed < 3) and not(sameresult):
     log('************************************************************************', 1)
-    # log('*               PRESS ESC TO ABORT (skipped with speed=3)              *', 0)
-    # log('************************************************************************', 1)
+    log('Cleanup in SQL tables (skipped with speed=3):')
     if speed == 1 or step2 or step3:
       log('', 0)
       log(txtgreen + 'Clean database of duplicates and obsolete in timages' + txtnocolor, 0)
@@ -1496,7 +1493,7 @@ def SQLanalyse():
       SQLexec('CREATE INDEX idx_tmpimgpairs ON tmpimgpairs (Lsrcshortname, Rsrcshortname) TABLESPACE pg_default;')
       conn.commit()
       SQLexec('SELECT COUNT(*) FROM tmpimgpairs;', True)
-      SQLexec('DELETE FROM tmpimgpairs T USING tpairsuw P WHERE T.Lsrcshortname = P.srcshortname1 AND T.Rsrcshortname = P.srcshortname2;')
+      SQLexec('DELETE FROM tmpimgpairs T USING tpairsuw P WHERE (T.Lsrcshortname = P.srcshortname1 AND T.Rsrcshortname = P.srcshortname2) OR (T.Lsrcshortname = P.srcshortname2 AND T.Rsrcshortname = P.srcshortname1);')
     if not (StopAsked()):
       SQLexec('SELECT COUNT(*) FROM tmpimgpairs;', True)
 
@@ -1695,6 +1692,9 @@ def helpprt():
   log('  Speed=2 add SQL cleanup before comparison; Speed=1 remove unwanted before.', copyright)
   log('-maxdiff=n     Difference between 2 images to consider them similar. Distance = number of bits differents in a 32x18x3 key. Range from 0 to 1728.', copyright)
   log('-blksize=n     Technical parameter for comparison cache. No functional impact. RAM usage impact. Use this to override dynamic value.', copyright)
+  log('               For scan NOT in order, play with threads and blksize to keep RAM<100% and max cpu usage. Check also SQL disk usage.', copyright)
+  log('-ramsparing    Comparison will spare RAM usage at the cost of more and smaller SQL requests.', copyright)
+
   log('', copyright)
   log('STEP 3: ANALYSE', copyright)
   log('  Speed=1 add a last step of finding exact repetition in 3 or more sources.', copyright)
@@ -1773,6 +1773,9 @@ if __name__ == '__main__':
     if i == '-p':
       parallel = True
       i = ''
+    if i == '-ramsparing':
+      ramsparing = True
+      i = ''
     if i[:7] == '-speed=':
       speed = int(i[7:])
       i = ''
@@ -1842,15 +1845,15 @@ if __name__ == '__main__':
   log('sqldb       = ' + sqldb, copyright)
   log('tmp         = ' + tmp, copyright)
   log('debug       = ' + str(debug), copyright)
-  log('threads     = ' + str(threads), copyright)
+  log('threads     = ' + txtgreen + str(threads) + txtnocolor, copyright)
+  log('speed       = ' + txtgreen + str(speed) + txtnocolor, copyright)
   if parallel: log(txtgreen + 'PARALLEL MODE : ' + txtnocolor + 'You can use other instances on other terminals or other computer. NONE can be a Clean instance or you will have inconsistencies.', 0)
-  log('speed       = ' + str(speed), copyright)
   log('', copyright)
   log('foldervideo : ' + foldervideo, copyright)
   log('folderimg   : ' + folderimg, copyright)
   log('folderuw    : ' + folderuw, copyright)
   log('folderrs    : ' + folderrs, copyright)
-  log('fps         : 1 image every ' + str(fpsn) + ' second', copyright)
+  log('fps         : 1 image every ' + txtgreen + str(fpsn) + txtnocolor + ' second', copyright)
   if noffmpeg: log('noffmpeg set', copyright)
   if sameresult: log('sameresult set', copyright)
   log('limffmpeg   = ' + str(limffmpeg) + '%', copyright)
@@ -1858,9 +1861,13 @@ if __name__ == '__main__':
   log('maxdiff     = ' + str(maxdiff), copyright)
   log('maxdiffuw   = ' + str(maxdiffuw), copyright)
   log('minimg      = ' + str(minimg), copyright)
-  if step1: log('Step1', copyright)
-  if step2: log('Step2', copyright)
-  if step3: log('Step3', copyright)
+  if step1: log(txtgreen + 'Step1' + txtnocolor, copyright)
+  if step2:
+    if ramsparing:
+      log(txtgreen + 'Step2 in RAM Sparing mode' + txtnocolor, copyright)
+    else:
+      log(txtgreen + 'Step2' + txtnocolor, copyright)
+  if step3: log(txtgreen + 'Step3' + txtnocolor, copyright)
   log('', 0)
 
   if step0:
@@ -1912,7 +1919,6 @@ if __name__ == '__main__':
   smm = SharedMemoryManager()
   smm.start()  # Start the process that manages the shared memory blocks
 
-  log('Cleanup in SQL tables (skipped with speed=3):')
   SQLclean()
 
   # Step 1: Delete obsolete images
